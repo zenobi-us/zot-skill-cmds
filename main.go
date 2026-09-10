@@ -103,11 +103,11 @@ func configPaths(cwd string) []string {
 	home, _ := os.UserHomeDir()
 	paths := []string{
 		filepath.Join(home, ".claude", "settings.json"),
-		filepath.Join(zotHome(), "zot-cluade-hooks.json"),
+		filepath.Join(zotHome(), "zot-extension-template-golang.json"),
 		filepath.Join(cwd, ".claude", "settings.json"),
 		filepath.Join(cwd, ".claude", "settings.local.json"),
-		filepath.Join(cwd, ".zot", "zot-cluade-hooks.json"),
-		filepath.Join(cwd, ".zot", "zot-cluade-hooks.local.json"),
+		filepath.Join(cwd, ".zot", "zot-extension-template-golang.json"),
+		filepath.Join(cwd, ".zot", "zot-extension-template-golang.local.json"),
 	}
 	if value := os.Getenv("ZOT_HOOKS_PATH"); value != "" {
 		paths = append(paths, filepath.Join(cwd, value))
@@ -547,7 +547,9 @@ func (a *app) formatLocations() string {
 	b.WriteString("\n\nThe local hook command writes to: " + localConfigPath(a.cwd))
 	return b.String()
 }
-func localConfigPath(cwd string) string { return filepath.Join(cwd, ".zot", "zot-cluade-hooks.json") }
+func localConfigPath(cwd string) string {
+	return filepath.Join(cwd, ".zot", "zot-extension-template-golang.json")
+}
 
 func (a *app) addLocalHook(event, command string) (string, error) {
 	path := localConfigPath(a.cwd)
