@@ -1,4 +1,4 @@
-module github.com/zenobi-us/zot-extension-template-golang
+module github.com/zenobi-us/zot-skill-cmds
 
 go 1.25.0
 
