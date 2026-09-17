@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -55,16 +56,63 @@ func absolute(path string) string {
 	return filepath.Clean(filepath.Join(cwd, path))
 }
 
+type extensionManifest struct {
+	Name    string   `json:"name"`
+	Enabled *bool    `json:"enabled,omitempty"`
+	Skills  []string `json:"skills,omitempty"`
+}
+
+func (m extensionManifest) isEnabled() bool {
+	return m.Enabled == nil || *m.Enabled
+}
+
+func extensionSkillRoots(cwd string) []string {
+	roots := []string{}
+	extensionRoots := []string{filepath.Join(cwd, ".zot", "extensions"), filepath.Join(zotHome(), "extensions")}
+	for _, extensionsRoot := range extensionRoots {
+		entries, err := os.ReadDir(extensionsRoot)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			dir := filepath.Join(extensionsRoot, entry.Name())
+			info, err := os.Stat(dir)
+			if err != nil || !info.IsDir() {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(dir, "extension.json"))
+			if err != nil {
+				continue
+			}
+			var manifest extensionManifest
+			if json.Unmarshal(data, &manifest) != nil || !manifest.isEnabled() {
+				continue
+			}
+			for _, skillRoot := range manifest.Skills {
+				root := filepath.Clean(filepath.Join(dir, skillRoot))
+				rel, err := filepath.Rel(dir, root)
+				if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+					logf("ignoring skill root %q in extension %q: path escapes extension", skillRoot, manifest.Name)
+					continue
+				}
+				roots = append(roots, root)
+			}
+		}
+	}
+	return roots
+}
+
 func skillRoots(cwd string) []string {
 	home, _ := os.UserHomeDir()
-	return []string{
+	roots := extensionSkillRoots(cwd)
+	return append(roots,
 		filepath.Join(cwd, ".zot", "skills"),
 		filepath.Join(zotHome(), "skills"),
 		filepath.Join(cwd, ".claude", "skills"),
 		filepath.Join(home, ".claude", "skills"),
 		filepath.Join(cwd, ".agents", "skills"),
 		filepath.Join(home, ".agents", "skills"),
-	}
+	)
 }
 
 func kebab(value string) string {

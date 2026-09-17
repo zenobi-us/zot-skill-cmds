@@ -42,16 +42,18 @@ This is an extension policy. It does not change Claude Code's own default behavi
 
 ## Discovery
 
-The extension scans these roots in zot's precedence order:
+The extension scans extension-declared skill roots first, matching zot's extension precedence:
 
-1. `./.zot/skills`
-2. `$ZOT_HOME/skills`
-3. `./.claude/skills`
-4. `~/.claude/skills`
-5. `./.agents/skills`
-6. `~/.agents/skills`
+1. `./.zot/extensions/*/skills` from each enabled `extension.json`
+2. `$ZOT_HOME/extensions/*/skills` from each enabled `extension.json`
+3. `./.zot/skills`
+4. `$ZOT_HOME/skills`
+5. `./.claude/skills`
+6. `~/.claude/skills`
+7. `./.agents/skills`
+8. `~/.agents/skills`
 
-Only files named `SKILL.md` are considered. Duplicate canonical skill names keep the first match. The extension reloads a skill body when its command runs, so content edits do not need an extension restart.
+This lets the extension alias skills bundled by installed zot skill extensions, such as `/commit` for a skill with `user-invocable: true`. Symlinked extension directories are supported. Only files named `SKILL.md` are considered. Duplicate canonical skill names keep the first match. The extension reloads a skill body when its command runs, so content edits do not need an extension restart.
 
 The current implementation uses a small frontmatter parser and reads `name`, `description`, and `user-invocable`. Unknown fields are ignored.
 

@@ -56,6 +56,45 @@ func TestAliasForNamespacedSkill(t *testing.T) {
 	}
 }
 
+func TestExtensionSkillRootsReadsEnabledManifest(t *testing.T) {
+	cwd := t.TempDir()
+	state := filepath.Join(cwd, "state")
+	t.Setenv("ZOT_HOME", state)
+	extensionDir := filepath.Join(state, "extensions", "developer")
+	if err := os.MkdirAll(filepath.Join(extensionDir, "skills", "commit"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(extensionDir, "extension.json"), []byte(`{"name":"developer","skills":["./skills"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeSkill(t, filepath.Join(extensionDir, "skills"), "commit", "---\nname: commit\nuser-invocable: true\n---\nbody")
+
+	roots := extensionSkillRoots(cwd)
+	if len(roots) != 1 || roots[0] != filepath.Join(extensionDir, "skills") {
+		t.Fatalf("extension skill roots = %v", roots)
+	}
+	found := discover(cwd)
+	if len(found) != 1 || found[0].name != "commit" || !found[0].userValue {
+		t.Fatalf("discovered skills = %+v", found)
+	}
+}
+
+func TestExtensionSkillRootsRejectsTraversal(t *testing.T) {
+	cwd := t.TempDir()
+	state := filepath.Join(cwd, "state")
+	t.Setenv("ZOT_HOME", state)
+	extensionDir := filepath.Join(state, "extensions", "bad")
+	if err := os.MkdirAll(extensionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(extensionDir, "extension.json"), []byte(`{"name":"bad","skills":["../outside"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if roots := extensionSkillRoots(cwd); len(roots) != 0 {
+		t.Fatalf("traversal skill roots = %v", roots)
+	}
+}
+
 func TestDiscoverUsesPrecedenceAndOnlyExplicitTrue(t *testing.T) {
 	cwd := t.TempDir()
 	t.Setenv("ZOT_HOME", filepath.Join(cwd, "state"))
