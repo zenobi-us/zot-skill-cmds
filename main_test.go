@@ -71,7 +71,7 @@ func TestExtensionSkillRootsReadsEnabledManifest(t *testing.T) {
 	writeSkill(t, filepath.Join(extensionDir, "skills"), "commit", "---\nname: commit\nuser-invocable: true\n---\nbody")
 
 	roots := extensionSkillRoots(cwd)
-	if len(roots) != 1 || roots[0] != filepath.Join(extensionDir, "skills") {
+	if len(roots) != 1 || roots[0].path != filepath.Join(extensionDir, "skills") || roots[0].namespace != "developer" {
 		t.Fatalf("extension skill roots = %v", roots)
 	}
 	found := discover(cwd)
@@ -119,6 +119,54 @@ func TestInvokeDelegatesSkillLoadingToSkillTool(t *testing.T) {
 	}
 	if strings.Contains(response.Prompt, "secret skill instructions") || strings.Contains(response.Prompt, "make a clean commit") {
 		t.Fatal("skill contents were embedded in the user prompt")
+	}
+}
+
+func TestNamespaceCommandsUseExtensionName(t *testing.T) {
+	cwd := t.TempDir()
+	state := filepath.Join(cwd, "state")
+	t.Setenv("ZOT_HOME", state)
+	extensionDir := filepath.Join(state, "extensions", "developer")
+	if err := os.MkdirAll(filepath.Join(extensionDir, "skills", "commit"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(extensionDir, "extension.json"), []byte(`{"name":"developer","skills":["./skills"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeSkill(t, filepath.Join(extensionDir, "skills"), "commit", "---\nname: commit\nuser-invocable: true\n---\nbody")
+
+	found := discover(cwd)
+	if len(found) != 1 || found[0].namespace != "developer" {
+		t.Fatalf("discovered skills = %+v", found)
+	}
+	a := &app{config: config{NamespaceCommands: true}, skill: map[string]skill{}}
+	for _, s := range found {
+		alias := aliasFor(s.name)
+		if a.config.NamespaceCommands && s.namespace != "" {
+			alias = kebab(s.namespace) + "-" + alias
+		}
+		if alias != "developer-commit" {
+			t.Fatalf("namespaced alias = %q", alias)
+		}
+	}
+}
+
+func TestConfigCommandWritesStateFile(t *testing.T) {
+	t.Setenv("ZOT_HOME", t.TempDir())
+	a := &app{}
+	response := a.configCommand("namespace on")
+	if response.Action != "display" {
+		t.Fatalf("response action = %q", response.Action)
+	}
+	loaded, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.NamespaceCommands {
+		t.Fatal("namespace setting was not persisted")
+	}
+	if filepath.Dir(configPath()) != os.Getenv("ZOT_HOME") {
+		t.Fatalf("config path = %q", configPath())
 	}
 }
 

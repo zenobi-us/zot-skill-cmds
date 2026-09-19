@@ -22,15 +22,31 @@ type skill struct {
 	description string
 	path        string
 	body        string
+	namespace   string
 	userSet     bool
 	userValue   bool
 }
 
-type app struct {
-	ext   *ext.Extension
-	cwd   string
-	skill map[string]skill
+type skillRoot struct {
+	path      string
+	namespace string
 }
+
+type config struct {
+	NamespaceCommands bool `json:"namespace_cmds,omitempty"`
+}
+
+type app struct {
+	ext    *ext.Extension
+	cwd    string
+	config config
+	skill  map[string]skill
+}
+
+const (
+	configFileName    = "skill-cmds.json"
+	configCommandName = "skill-cmds"
+)
 
 func logf(format string, args ...any) {
 	_, _ = fmt.Fprintf(os.Stderr, "[%s] %s\n", extensionName, fmt.Sprintf(format, args...))
@@ -66,8 +82,8 @@ func (m extensionManifest) isEnabled() bool {
 	return m.Enabled == nil || *m.Enabled
 }
 
-func extensionSkillRoots(cwd string) []string {
-	roots := []string{}
+func extensionSkillRoots(cwd string) []skillRoot {
+	roots := []skillRoot{}
 	extensionRoots := []string{filepath.Join(cwd, ".zot", "extensions"), filepath.Join(zotHome(), "extensions")}
 	for _, extensionsRoot := range extensionRoots {
 		entries, err := os.ReadDir(extensionsRoot)
@@ -88,31 +104,63 @@ func extensionSkillRoots(cwd string) []string {
 			if json.Unmarshal(data, &manifest) != nil || !manifest.isEnabled() {
 				continue
 			}
-			for _, skillRoot := range manifest.Skills {
-				root := filepath.Clean(filepath.Join(dir, skillRoot))
+			for _, manifestSkillRoot := range manifest.Skills {
+				root := filepath.Clean(filepath.Join(dir, manifestSkillRoot))
 				rel, err := filepath.Rel(dir, root)
 				if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-					logf("ignoring skill root %q in extension %q: path escapes extension", skillRoot, manifest.Name)
+					logf("ignoring skill root %q in extension %q: path escapes extension", manifestSkillRoot, manifest.Name)
 					continue
 				}
-				roots = append(roots, root)
+				roots = append(roots, skillRoot{path: root, namespace: manifest.Name})
 			}
 		}
 	}
 	return roots
 }
 
-func skillRoots(cwd string) []string {
+func skillRoots(cwd string) []skillRoot {
 	home, _ := os.UserHomeDir()
 	roots := extensionSkillRoots(cwd)
 	return append(roots,
-		filepath.Join(cwd, ".zot", "skills"),
-		filepath.Join(zotHome(), "skills"),
-		filepath.Join(cwd, ".claude", "skills"),
-		filepath.Join(home, ".claude", "skills"),
-		filepath.Join(cwd, ".agents", "skills"),
-		filepath.Join(home, ".agents", "skills"),
+		skillRoot{path: filepath.Join(cwd, ".zot", "skills")},
+		skillRoot{path: filepath.Join(zotHome(), "skills")},
+		skillRoot{path: filepath.Join(cwd, ".claude", "skills")},
+		skillRoot{path: filepath.Join(home, ".claude", "skills")},
+		skillRoot{path: filepath.Join(cwd, ".agents", "skills")},
+		skillRoot{path: filepath.Join(home, ".agents", "skills")},
 	)
+}
+
+func configPath() string {
+	return filepath.Join(zotHome(), configFileName)
+}
+
+func loadConfig() (config, error) {
+	data, err := os.ReadFile(configPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return config{}, nil
+	}
+	if err != nil {
+		return config{}, err
+	}
+	var result config
+	if err := json.Unmarshal(data, &result); err != nil {
+		return config{}, err
+	}
+	return result, nil
+}
+
+func saveConfig(value config) error {
+	path := configPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	return os.WriteFile(path, data, 0o600)
 }
 
 func kebab(value string) string {
@@ -207,8 +255,8 @@ func splitFrontmatter(data string) (front, body string, ok bool) {
 func discover(cwd string) []skill {
 	seen := map[string]bool{}
 	var result []skill
-	for _, root := range skillRoots(cwd) {
-		root, err := filepath.EvalSymlinks(root)
+	for _, rootSpec := range skillRoots(cwd) {
+		root, err := filepath.EvalSymlinks(rootSpec.path)
 		if err != nil {
 			continue
 		}
@@ -225,6 +273,7 @@ func discover(cwd string) []skill {
 				logf("ignoring %s: %v", path, err)
 				return nil
 			}
+			s.namespace = rootSpec.namespace
 			if seen[s.name] {
 				return nil
 			}
@@ -260,6 +309,9 @@ func (a *app) reload() {
 			continue
 		}
 		alias := aliasFor(s.name)
+		if a.config.NamespaceCommands && s.namespace != "" {
+			alias = kebab(s.namespace) + "-" + alias
+		}
 		if !validCommand(alias) {
 			logf("ignoring invalid alias %q for skill %q", alias, s.name)
 			continue
@@ -283,6 +335,26 @@ func (a *app) reload() {
 		})
 	}
 	logf("registered %d skill command(s)", len(keys))
+}
+
+func (a *app) configCommand(args string) ext.Response {
+	args = strings.TrimSpace(args)
+	if args == "" || strings.EqualFold(args, "show") {
+		data, err := json.MarshalIndent(a.config, "", "  ")
+		if err != nil {
+			return ext.Errorf("cannot format configuration: %v", err)
+		}
+		return ext.Display(fmt.Sprintf("%s\n%s", configPath(), data))
+	}
+	fields := strings.Fields(args)
+	if len(fields) != 2 || !strings.EqualFold(fields[0], "namespace") || (strings.ToLower(fields[1]) != "on" && strings.ToLower(fields[1]) != "off") {
+		return ext.Errorf("usage: /%s [show|namespace on|namespace off]", configCommandName)
+	}
+	a.config.NamespaceCommands = strings.EqualFold(fields[1], "on")
+	if err := saveConfig(a.config); err != nil {
+		return ext.Errorf("cannot save configuration: %v", err)
+	}
+	return ext.Display(fmt.Sprintf("saved %s; restart zot to apply namespace command changes", configPath()))
 }
 
 func (a *app) invoke(alias, args string) ext.Response {
@@ -309,8 +381,15 @@ func (a *app) invoke(alias, args string) ext.Response {
 
 func main() {
 	a := &app{ext: ext.New(extensionName, version), skill: map[string]skill{}}
+	a.ext.Command(configCommandName, "configure skill commands", a.configCommand)
 	a.ext.OnHello(func(info ext.HostInfo) {
 		a.cwd = info.CWD
+		loaded, err := loadConfig()
+		if err != nil {
+			logf("using default configuration: %v", err)
+		} else {
+			a.config = loaded
+		}
 		a.reload()
 	})
 	if err := a.ext.Run(); err != nil && !errors.Is(err, io.EOF) {

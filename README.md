@@ -22,6 +22,23 @@ The extension registers the final name component as a command:
 /commit review the staged diff
 ```
 
+## Configuration
+
+The extension stores user configuration in `$ZOT_HOME/skill-cmds.json` (normally
+`~/.local/state/zot/skill-cmds.json`). Use `/skill-cmds` to inspect it, or run:
+
+```text
+/skill-cmds namespace on
+/skill-cmds namespace off
+```
+
+With namespace commands enabled, skills supplied by an enabled zot extension
+(or Claude-compatible plugin packaged as an extension) use the extension name
+as a command prefix. For example, a `commit` skill from the `developer`
+extension is registered as `/developer-commit`; project and user skills remain
+unprefixed. Restart zot after changing this setting so the command registry is
+rebuilt.
+
 The canonical zot command remains available:
 
 ```text
@@ -53,7 +70,7 @@ The extension scans extension-declared skill roots first, matching zot's extensi
 7. `./.agents/skills`
 8. `~/.agents/skills`
 
-This lets the extension alias skills bundled by installed zot skill extensions, such as `/commit` for a skill with `user-invocable: true`. Symlinked extension directories are supported. Only files named `SKILL.md` are considered. Duplicate canonical skill names keep the first match. When a command runs, the extension asks zot's built-in `skill` tool to load the skill by name instead of embedding the skill contents in the user prompt. It also adds explicit path context to the resulting request: `SKILL.md` and its containing directory are shown, and bundled assets, references, and scripts are declared relative to that skill directory rather than the user's project cwd. The skill tool owns the full skill text and applies its normal loading behavior. Content edits do not need an extension restart.
+This lets the extension alias skills bundled by installed zot skill extensions, such as `/commit` for a skill with `user-invocable: true`. Symlinked extension directories are supported. Only files named `SKILL.md` are considered. Duplicate canonical skill names keep the first match. When namespace commands are enabled, extension-declared skill roots retain the enabled extension manifest's `name` as their namespace. When a command runs, the extension asks zot's built-in `skill` tool to load the skill by name instead of embedding the skill contents in the user prompt. It also adds explicit path context to the resulting request: `SKILL.md` and its containing directory are shown, and bundled assets, references, and scripts are declared relative to that skill directory rather than the user's project cwd. The skill tool owns the full skill text and applies its normal loading behavior. Content edits do not need an extension restart.
 
 The current implementation uses a small frontmatter parser and reads `name`, `description`, and `user-invocable`. Unknown fields are ignored.
 
