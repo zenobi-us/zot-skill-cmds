@@ -53,7 +53,7 @@ The extension scans extension-declared skill roots first, matching zot's extensi
 7. `./.agents/skills`
 8. `~/.agents/skills`
 
-This lets the extension alias skills bundled by installed zot skill extensions, such as `/commit` for a skill with `user-invocable: true`. Symlinked extension directories are supported. Only files named `SKILL.md` are considered. Duplicate canonical skill names keep the first match. The extension reloads a skill body when its command runs, so content edits do not need an extension restart.
+This lets the extension alias skills bundled by installed zot skill extensions, such as `/commit` for a skill with `user-invocable: true`. Symlinked extension directories are supported. Only files named `SKILL.md` are considered. Duplicate canonical skill names keep the first match. When a command runs, the extension asks zot's built-in `skill` tool to load the skill by name instead of embedding the skill contents in the user prompt. It also adds explicit path context to the resulting request: `SKILL.md` and its containing directory are shown, and bundled assets, references, and scripts are declared relative to that skill directory rather than the user's project cwd. The skill tool owns the full skill text and applies its normal loading behavior. Content edits do not need an extension restart.
 
 The current implementation uses a small frontmatter parser and reads `name`, `description`, and `user-invocable`. Unknown fields are ignored.
 

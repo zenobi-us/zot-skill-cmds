@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -92,6 +93,32 @@ func TestExtensionSkillRootsRejectsTraversal(t *testing.T) {
 	}
 	if roots := extensionSkillRoots(cwd); len(roots) != 0 {
 		t.Fatalf("traversal skill roots = %v", roots)
+	}
+}
+
+func TestInvokeDelegatesSkillLoadingToSkillTool(t *testing.T) {
+	root := t.TempDir()
+	path := writeSkill(t, root, "commit", "---\nname: developer:commit\ndescription: make a clean commit\nuser-invocable: true\n---\nsecret skill instructions")
+	a := &app{skill: map[string]skill{
+		"commit": {name: "developer:commit", path: path},
+	}}
+
+	response := a.invoke("commit", "commit the current changes")
+	if response.Action != "prompt" {
+		t.Fatalf("response action = %q, want prompt", response.Action)
+	}
+	want := "Use the skill tool to load the skill named \"developer:commit\", then follow its instructions for this request." +
+		"\n\nSkill path context:" +
+		"\n- SKILL.md: " + path +
+		"\n- Skill directory: " + filepath.Dir(path) +
+		"\n- Resolve relative asset, reference, and script paths from the skill directory above, not from the user's project cwd." +
+		"\n- The user's project cwd is still the working directory for project changes; use an absolute skill path (or cd to the skill directory) when reading or running bundled skill files." +
+		"\n\nUser request:\ncommit the current changes"
+	if response.Prompt != want {
+		t.Fatalf("prompt = %q, want %q", response.Prompt, want)
+	}
+	if strings.Contains(response.Prompt, "secret skill instructions") || strings.Contains(response.Prompt, "make a clean commit") {
+		t.Fatal("skill contents were embedded in the user prompt")
 	}
 }
 

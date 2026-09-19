@@ -298,13 +298,11 @@ func (a *app) invoke(alias, args string) ext.Response {
 	if fresh.name == "" {
 		fresh.name = s.name
 	}
-	prompt := fmt.Sprintf("Use the following skill for this request. Follow its instructions.\n\n# Skill: %s\n\n", fresh.name)
-	if fresh.description != "" {
-		prompt += fresh.description + "\n\n"
-	}
-	prompt += "Skill directory: " + filepath.Dir(fresh.path) + "\n\n---\n\n" + strings.TrimSpace(fresh.body)
+	skillDir := filepath.Dir(s.path)
+	prompt := fmt.Sprintf("Use the skill tool to load the skill named %q, then follow its instructions for this request.", fresh.name)
+	prompt += fmt.Sprintf("\n\nSkill path context:\n- SKILL.md: %s\n- Skill directory: %s\n- Resolve relative asset, reference, and script paths from the skill directory above, not from the user's project cwd.\n- The user's project cwd is still the working directory for project changes; use an absolute skill path (or cd to the skill directory) when reading or running bundled skill files.", s.path, skillDir)
 	if args = strings.TrimSpace(args); args != "" {
-		prompt += "\n\n---\n\nUser request:\n" + args
+		prompt += "\n\nUser request:\n" + args
 	}
 	return ext.Prompt(prompt)
 }
