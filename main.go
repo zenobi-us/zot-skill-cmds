@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,11 +37,14 @@ type config struct {
 	NamespaceCommands bool `json:"namespace_cmds,omitempty"`
 }
 
+type toolCaller func(context.Context, string, any) (ext.ToolResult, error)
+
 type app struct {
-	ext    *ext.Extension
-	cwd    string
-	config config
-	skill  map[string]skill
+	ext      *ext.Extension
+	callTool toolCaller
+	cwd      string
+	config   config
+	skill    map[string]skill
 }
 
 const (
@@ -274,6 +278,9 @@ func discover(cwd string) []skill {
 				return nil
 			}
 			s.namespace = rootSpec.namespace
+			if s.namespace != "" {
+				s.name = kebab(s.namespace) + ":" + s.name
+			}
 			if seen[s.name] {
 				return nil
 			}
@@ -357,30 +364,55 @@ func (a *app) configCommand(args string) ext.Response {
 	return ext.Display(fmt.Sprintf("saved %s; restart zot to apply namespace command changes", configPath()))
 }
 
+func toolResultText(result ext.ToolResult) string {
+	var parts []string
+	for _, block := range result.Content {
+		if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+			parts = append(parts, block.Text)
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
 func (a *app) invoke(alias, args string) ext.Response {
-	// Read the file again so edits take effect without restarting zot.
 	s, ok := a.skill[alias]
 	if !ok {
 		return ext.Errorf("skill alias /%s is no longer available", alias)
 	}
-	fresh, err := parseSkill(s.path, filepath.Dir(filepath.Dir(s.path)))
+	if a.callTool == nil {
+		return ext.Errorf("cannot load skill %q: skill tool caller is unavailable", s.name)
+	}
+	result, err := a.callTool(context.Background(), "skill", map[string]string{"name": s.name})
 	if err != nil {
-		return ext.Errorf("cannot load skill %q: %v", s.name, err)
+		if strings.Contains(err.Error(), "does not support call_tool") {
+			return ext.Errorf("cannot load skill %q: zot v0.3.95 or newer is required", s.name)
+		}
+		return ext.Errorf("cannot load skill %q through zot: %v", s.name, err)
 	}
-	if fresh.name == "" {
-		fresh.name = s.name
+	instructions := toolResultText(result)
+	if result.IsError {
+		if instructions == "" {
+			instructions = "skill tool returned an unspecified error"
+		}
+		return ext.Errorf("cannot load skill %q: %s", s.name, instructions)
 	}
+	if instructions == "" {
+		return ext.Errorf("cannot load skill %q: skill tool returned no text", s.name)
+	}
+
 	skillDir := filepath.Dir(s.path)
-	prompt := fmt.Sprintf("Use the skill tool to load the skill named %q, then follow its instructions for this request.", fresh.name)
-	prompt += fmt.Sprintf("\n\nSkill path context:\n- SKILL.md: %s\n- Skill directory: %s\n- Resolve relative asset, reference, and script paths from the skill directory above, not from the user's project cwd.\n- The user's project cwd is still the working directory for project changes; use an absolute skill path (or cd to the skill directory) when reading or running bundled skill files.", s.path, skillDir)
+	prompt := "Use the following skill for this request. Follow its instructions."
+	prompt += fmt.Sprintf("\n\nSkill directory: %s", skillDir)
+	prompt += "\n\n" + instructions
 	if args = strings.TrimSpace(args); args != "" {
-		prompt += "\n\nUser request:\n" + args
+		prompt += "\n\n---\n\nUser request:\n" + args
 	}
 	return ext.Prompt(prompt)
 }
 
 func main() {
-	a := &app{ext: ext.New(extensionName, version), skill: map[string]skill{}}
+	extension := ext.New(extensionName, version)
+	a := &app{ext: extension, callTool: extension.CallTool, skill: map[string]skill{}}
 	a.ext.Command(configCommandName, "configure skill commands", a.configCommand)
 	a.ext.OnHello(func(info ext.HostInfo) {
 		a.cwd = info.CWD

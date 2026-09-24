@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/patriceckhart/zot/packages/agent/ext"
 )
 
 func writeSkill(t *testing.T, root, dir, content string) string {
@@ -17,6 +21,11 @@ func writeSkill(t *testing.T, root, dir, content string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func isolateUserHome(t *testing.T) {
+	t.Helper()
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
 }
 
 func TestParseSkillUserInvocableIsTriState(t *testing.T) {
@@ -58,6 +67,7 @@ func TestAliasForNamespacedSkill(t *testing.T) {
 }
 
 func TestExtensionSkillRootsReadsEnabledManifest(t *testing.T) {
+	isolateUserHome(t)
 	cwd := t.TempDir()
 	state := filepath.Join(cwd, "state")
 	t.Setenv("ZOT_HOME", state)
@@ -75,7 +85,7 @@ func TestExtensionSkillRootsReadsEnabledManifest(t *testing.T) {
 		t.Fatalf("extension skill roots = %v", roots)
 	}
 	found := discover(cwd)
-	if len(found) != 1 || found[0].name != "commit" || !found[0].userValue {
+	if len(found) != 1 || found[0].name != "developer:commit" || !found[0].userValue {
 		t.Fatalf("discovered skills = %+v", found)
 	}
 }
@@ -96,33 +106,95 @@ func TestExtensionSkillRootsRejectsTraversal(t *testing.T) {
 	}
 }
 
-func TestInvokeDelegatesSkillLoadingToSkillTool(t *testing.T) {
+func TestInvokeCallsBuiltinSkillTool(t *testing.T) {
 	root := t.TempDir()
-	path := writeSkill(t, root, "commit", "---\nname: developer:commit\ndescription: make a clean commit\nuser-invocable: true\n---\nsecret skill instructions")
-	a := &app{skill: map[string]skill{
-		"commit": {name: "developer:commit", path: path},
-	}}
+	path := writeSkill(t, root, "commit", "---\nname: developer:commit\ndescription: stale description\nuser-invocable: true\n---\nstale instructions")
+	var calledName string
+	var calledArgs any
+	a := &app{
+		callTool: func(_ context.Context, name string, args any) (ext.ToolResult, error) {
+			calledName = name
+			calledArgs = args
+			return ext.TextResult("# Skill: developer:commit\n\nFresh instructions from zot."), nil
+		},
+		skill: map[string]skill{
+			"commit": {name: "developer:commit", path: path},
+		},
+	}
 
 	response := a.invoke("commit", "commit the current changes")
 	if response.Action != "prompt" {
 		t.Fatalf("response action = %q, want prompt", response.Action)
 	}
-	want := "Use the skill tool to load the skill named \"developer:commit\", then follow its instructions for this request." +
-		"\n\nSkill path context:" +
-		"\n- SKILL.md: " + path +
-		"\n- Skill directory: " + filepath.Dir(path) +
-		"\n- Resolve relative asset, reference, and script paths from the skill directory above, not from the user's project cwd." +
-		"\n- The user's project cwd is still the working directory for project changes; use an absolute skill path (or cd to the skill directory) when reading or running bundled skill files." +
-		"\n\nUser request:\ncommit the current changes"
+	if calledName != "skill" {
+		t.Fatalf("called tool = %q, want skill", calledName)
+	}
+	args, ok := calledArgs.(map[string]string)
+	if !ok || args["name"] != "developer:commit" {
+		t.Fatalf("called args = %#v", calledArgs)
+	}
+	want := "Use the following skill for this request. Follow its instructions." +
+		"\n\nSkill directory: " + filepath.Dir(path) +
+		"\n\n# Skill: developer:commit\n\nFresh instructions from zot." +
+		"\n\n---\n\nUser request:\ncommit the current changes"
 	if response.Prompt != want {
 		t.Fatalf("prompt = %q, want %q", response.Prompt, want)
 	}
-	if strings.Contains(response.Prompt, "secret skill instructions") || strings.Contains(response.Prompt, "make a clean commit") {
-		t.Fatal("skill contents were embedded in the user prompt")
+	if strings.Contains(response.Prompt, "stale instructions") || strings.Contains(response.Prompt, "Use the skill tool to load") {
+		t.Fatal("prompt did not use the instructions returned by zot")
+	}
+}
+
+func TestInvokeReportsSkillToolFailures(t *testing.T) {
+	base := app{skill: map[string]skill{"commit": {name: "developer:commit", path: "/skills/commit/SKILL.md"}}}
+	tests := []struct {
+		name     string
+		callTool toolCaller
+		want     string
+	}{
+		{
+			name: "unsupported host",
+			callTool: func(context.Context, string, any) (ext.ToolResult, error) {
+				return ext.ToolResult{}, errors.New("host does not support call_tool")
+			},
+			want: "zot v0.3.95 or newer is required",
+		},
+		{
+			name: "transport error",
+			callTool: func(context.Context, string, any) (ext.ToolResult, error) {
+				return ext.ToolResult{}, context.DeadlineExceeded
+			},
+			want: "context deadline exceeded",
+		},
+		{
+			name: "tool error",
+			callTool: func(context.Context, string, any) (ext.ToolResult, error) {
+				return ext.ToolResult{IsError: true, Content: []ext.ToolContent{ext.Text(`skill: no skill named "developer:commit"`)}}, nil
+			},
+			want: "no skill named",
+		},
+		{
+			name: "empty result",
+			callTool: func(context.Context, string, any) (ext.ToolResult, error) {
+				return ext.ToolResult{}, nil
+			},
+			want: "returned no text",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			a := base
+			a.callTool = tc.callTool
+			response := a.invoke("commit", "")
+			if response.Error == "" || !strings.Contains(response.Error, tc.want) {
+				t.Fatalf("response error = %q, want it to contain %q", response.Error, tc.want)
+			}
+		})
 	}
 }
 
 func TestNamespaceCommandsUseExtensionName(t *testing.T) {
+	isolateUserHome(t)
 	cwd := t.TempDir()
 	state := filepath.Join(cwd, "state")
 	t.Setenv("ZOT_HOME", state)
@@ -171,6 +243,7 @@ func TestConfigCommandWritesStateFile(t *testing.T) {
 }
 
 func TestDiscoverUsesPrecedenceAndOnlyExplicitTrue(t *testing.T) {
+	isolateUserHome(t)
 	cwd := t.TempDir()
 	t.Setenv("ZOT_HOME", filepath.Join(cwd, "state"))
 	writeSkill(t, cwd, filepath.Join(".claude", "skills", "developer", "commit"), "---\nname: developer:commit\ndescription: project\nuser-invocable: true\n---\nproject body")

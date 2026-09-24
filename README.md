@@ -1,6 +1,6 @@
 # zot-skill-cmds
 
-A Go extension for [zot](https://github.com/patriceckhart/zot) that exposes selected skills as short slash commands.
+A Go extension for [zot](https://github.com/patriceckhart/zot) v0.3.95 or newer that exposes selected skills as short slash commands.
 
 ## Mark a skill
 
@@ -70,11 +70,15 @@ The extension scans extension-declared skill roots first, matching zot's extensi
 7. `./.agents/skills`
 8. `~/.agents/skills`
 
-This lets the extension alias skills bundled by installed zot skill extensions, such as `/commit` for a skill with `user-invocable: true`. Symlinked extension directories are supported. Only files named `SKILL.md` are considered. Duplicate canonical skill names keep the first match. When namespace commands are enabled, extension-declared skill roots retain the enabled extension manifest's `name` as their namespace. When a command runs, the extension asks zot's built-in `skill` tool to load the skill by name instead of embedding the skill contents in the user prompt. It also adds explicit path context to the resulting request: `SKILL.md` and its containing directory are shown, and bundled assets, references, and scripts are declared relative to that skill directory rather than the user's project cwd. The skill tool owns the full skill text and applies its normal loading behavior. Content edits do not need an extension restart.
+This lets the extension alias skills bundled by installed zot skill extensions, such as `/commit` for a skill with `user-invocable: true`. Symlinked extension directories are supported. Only files named `SKILL.md` are considered. Duplicate canonical skill names keep the first match. Extension-supplied skills use zot's canonical `<extension>:<skill>` name, while namespace commands optionally use the extension name as the alias prefix.
+
+When a command runs, the extension uses zot v0.3.95's host-mediated tool API to call the built-in `skill` tool directly. It then submits the returned instructions, the skill directory, and any trailing command arguments as the request. This avoids asking the model to select and call the skill tool itself while preserving skill-relative asset, reference, and script paths. Because zot's skill registry is loaded at startup, restart or reload zot after changing a skill's name or contents.
 
 The current implementation uses a small frontmatter parser and reads `name`, `description`, and `user-invocable`. Unknown fields are ignored.
 
 ## Install and test
+
+Install zot v0.3.95 or newer. Older hosts do not support extension-initiated tool calls and the command will report an error instead of starting a model turn.
 
 Build the extension:
 
